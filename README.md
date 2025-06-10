@@ -15,10 +15,10 @@ Download the model weights:
 - Get the model file on Hugging Face: https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench/tree/main
 - Place the file in: `models/DocLayout-YOLO-DocStructBench/`
 
-Create a `.env` file with your Gemini API key:
+Create a `.env` file with your Google API key to enable Gemini usage:
 
 ```ini
-GEMINI_API_KEY=your-key-here
+GOOGLE_API_KEY=your-key-here
 ```
 
 ## Usage
