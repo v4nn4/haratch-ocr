@@ -1,0 +1,28 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: haratch-ocr
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 1
+      timeoutSeconds: 3600
+      serviceAccountName: haratch-ocr@haratch-ocr.iam.gserviceaccount.com
+      containers:
+      - image: gcr.io/PROJECT_ID/haratch-ocr:latest
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        env:
+        - name: PORT
+          value: "8000"

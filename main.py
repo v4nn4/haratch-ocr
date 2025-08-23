@@ -3,7 +3,7 @@ import fire
 
 from src.pdf import convert_pdf_pages
 from src.extract import extract_all
-from src.translate import translate_folder
+from src.pipeline import run_issue
 
 issue = "1925-08"
 # issue = "1933-02"
@@ -15,7 +15,6 @@ class Paths:
     IMAGES = GENERATED / "images"
     OCR = GENERATED / "ocr"
     OUTPUT = Path("output")
-    TRANSLATIONS = OUTPUT / "translations"
 
 
 class Cli:
@@ -30,13 +29,8 @@ class Cli:
             convert_pdf_pages(pdf_path, image_dir)
         extract_all(image_dir, output_dir)
 
-    def translate(
-        self,
-        input_dir=Paths.IMAGES / issue,
-        output_dir=Paths.TRANSLATIONS / issue,
-        min_length=200,
-    ):
-        translate_folder(input_dir, output_dir, min_length)
+    def run(self, year: int, month: int):
+        return run_issue(year, month)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration
 
 load_dotenv()
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+if "GOOGLE_API_KEY" in os.environ:
+    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
 translate_function = FunctionDeclaration(
     name="store_translation",
