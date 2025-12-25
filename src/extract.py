@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image, ImageEnhance
 from doclayout_yolo import YOLOv10
 from torchvision.ops import nms
+from concurrent.futures import ThreadPoolExecutor
 from .ocr import run_tesseract
 
 
@@ -30,6 +31,12 @@ def enhance_and_binarize(img: Image.Image, contrast=2.5, brightness=2.5) -> Imag
     return img
 
 
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available() else "cpu"
+)
+
 def extract_paragraphs_and_lines(
     page_image_path: str,
     para_output: str,
@@ -37,18 +44,44 @@ def extract_paragraphs_and_lines(
     return_bboxes=False,
     conf_thres_para=0.25,
     iou_thres_para=0.45,
+    model=None,
+    inference_lock=None,
 ):
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available() else "cpu"
-    )
-    model = YOLOv10(
-        "models/DocLayout-YOLO-DocStructBench/doclayout_yolo_docstructbench_imgsz1024.pt"
-    )
+    if model is None:
+        model = YOLOv10(
+            "models/DocLayout-YOLO-DocStructBench/doclayout_yolo_docstructbench_imgsz1024.pt"
+        ).to(DEVICE)
 
-    page = Image.open(page_image_path).convert("RGB")
-    det_page = model.predict(page, imgsz=1024, conf=conf_thres_para, device=device)[0]
+    try:
+        page = Image.open(page_image_path).convert("RGB")
+    except Exception as e:
+        print(f"[ERROR] Could not open image {page_image_path}: {e}")
+        return []
+
+    # AI Layout Detection is GPU-bound and contention-heavy.
+    # We lock only the inference part to be sequential, while Tesseract/Preproc stays parallel.
+    # We use torch.no_grad() to avoid RuntimeError on MPS with multi-threading.
+    with torch.no_grad():
+        if inference_lock:
+            with inference_lock:
+                det_page = model.predict(
+                    page, 
+                    imgsz=1024, 
+                    conf=conf_thres_para, 
+                    device=DEVICE,
+                    half=(DEVICE != "cpu"), # FP16 on GPU/MPS
+                    verbose=False
+                )[0]
+        else:
+            det_page = model.predict(
+                page, 
+                imgsz=1024, 
+                conf=conf_thres_para, 
+                device=DEVICE,
+                half=(DEVICE != "cpu"),
+                verbose=False
+            )[0]
+
     boxes_p, classes_p, scores_p = (
         det_page.boxes.xyxy,
         det_page.boxes.cls,
@@ -58,11 +91,11 @@ def extract_paragraphs_and_lines(
     boxes_p = boxes_p[idx_p]
     classes_p = classes_p[idx_p]
 
-    results = []
-    for i, (cls, (x1, y1, x2, y2)) in enumerate(zip(classes_p, boxes_p)):
+    def process_paragraph(i, cls, bbox):
         if id_to_names[int(cls)] != "plain text":
-            continue
+            return None
 
+        x1, y1, x2, y2 = bbox
         crop = page.crop((int(x1), int(y1), int(x2), int(y2)))
         enhanced = enhance_and_binarize(crop)
 
@@ -71,7 +104,17 @@ def extract_paragraphs_and_lines(
             enhanced.save(para_path)
 
         text = run_tesseract(enhanced)
-        results.append(((x1, y1, x2, y2), text.strip()))
+        return ((x1, y1, x2, y2), text.strip())
+
+    # Process paragraphs in parallel
+    # Tesseract is CPU-bound, so we use enough workers to saturate the CPU
+    # but not too many to avoid context switching overhead.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(process_paragraph, i, cls, bbox)
+            for i, (cls, bbox) in enumerate(zip(classes_p, boxes_p))
+        ]
+        results = [f.result() for f in futures if f.result() is not None]
 
     return (
         results
@@ -83,24 +126,30 @@ def extract_paragraphs_and_lines(
     )
 
 
-def extract_all(image_dir: Path, output_dir: Path):
+def extract_all(image_dir: Path, output_dir: Path, model=None):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for image_path in sorted(image_dir.glob("page_*.png")):
-        print(f"Processing {image_path.name}")
-        width, height = Image.open(str(image_path)).size
-
-        results = extract_paragraphs_and_lines(
-            page_image_path=str(image_path),
-            para_output=None,
-            save_crops=False,
-            return_bboxes=True,
-        )
-
         output_json_path = output_dir / f"{image_path.stem}.json"
+        
+        if output_json_path.exists():
+            print(f"[OK] Skipping {image_path.name} — already processed.")
+            continue
+
+        try:
+            width, height = Image.open(str(image_path)).size
+            results = extract_paragraphs_and_lines(
+                page_image_path=str(image_path),
+                para_output=None,
+                save_crops=False,
+                return_bboxes=True,
+                model=model,
+            )
+        except Exception as e:
+            print(f"[ERROR] Skipping {image_path.name} due to error: {e}")
+            continue
 
         with output_json_path.open("w", encoding="utf-8") as f_json:
-
             json_data = {
                 "metadata": {"width": width, "height": height},
                 "paragraphs": [],

@@ -2,22 +2,19 @@ import requests
 from pathlib import Path
 
 
+from .paths import get_pdf_path
+
+
 def download_issue(year: int, month: int) -> Path:
-    month_names = [
-        "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin",
-        "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Decembre"
-    ]
-    
-    month_name = month_names[month - 1]
-    filename = f"HARATCH_{year}_{month:02d}-{month_name}.pdf"
-    url = f"https://archives.webaram.com/presse/haratch/pdf/{filename}"
-    
-    output_dir = Path("data") / "pdfs"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / filename
+    output_path = get_pdf_path(year, month)
     
     if output_path.exists():
         return output_path
+
+    filename = output_path.name
+    url = f"https://archives.webaram.com/presse/haratch/pdf/{filename}"
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     response = requests.get(url)
     response.raise_for_status()
