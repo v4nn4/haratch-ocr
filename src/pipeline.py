@@ -258,24 +258,12 @@ def ocr_pipeline(
             "models/DocLayout-YOLO-DocStructBench/doclayout_yolo_docstructbench_imgsz1024.pt"
         ).to(DEVICE)
         
-        # Ensure model is in evaluation mode
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad = False
-
-        # Fuse for extra inference speed
-        try:
-            model.fuse()
-        except Exception:
-            pass
-
-        inference_lock = threading.Lock()
-        max_workers = 8 # Restored to 8 since AI lock is now very narrow (only for .predict)
+        BATCH_SIZE = 8  # Process 8 pages per YOLO batch
+        max_workers = 8  # For parallel Tesseract across pages
         
-        print(f"[PROCESS] Starting parallel producer-consumer pipeline for {issue_id}...")
+        print(f"[PROCESS] Starting batched YOLO pipeline for {issue_id} (batch_size={BATCH_SIZE})...")
         
-        image_queue = Queue(maxsize=20) # Buffer 20 images in memory
-        results_futures = []
+        image_queue = Queue(maxsize=20)  # Buffer 20 images in memory
         
         def producer():
             """Producer: Convert PDF pages to PNGs and put paths in the queue."""
@@ -292,26 +280,96 @@ def ocr_pipeline(
 
         # Start producer thread
         threading.Thread(target=producer, daemon=True).start()
-
-        # Step 3b: Consumer Pool: Procss OCR as images arrive
+        
+        # Import batch functions
+        from .extract import batch_yolo_detect, process_single_detection
+        
+        def process_batch_ocr(page_img, boxes, classes, page_path, ocr_dir, issue_id):
+            """Process a single page's OCR after YOLO detection."""
+            output_path = ocr_dir / f"{page_path.stem}.json"
+            
+            # Check local cache
+            if output_path.exists():
+                print(f"[OK] Loading local cached OCR for {page_path.name}")
+                with output_path.open("r", encoding="utf-8") as f:
+                    return json.load(f)
+            
+            # Check GCS cache
+            if issue_id:
+                client = get_gcs_client()
+                bucket = client.get_bucket(BUCKET_NAME)
+                blob_name = f"ocr/{issue_id}/{page_path.stem}.json"
+                if blob_exists(bucket, blob_name):
+                    print(f"[CLOUD] Downloading cached OCR for {page_path.name} from GCS...")
+                    blob = bucket.blob(blob_name)
+                    content = blob.download_as_text()
+                    json_data = json.loads(content)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with output_path.open("w", encoding="utf-8") as f:
+                        json.dump(json_data, f, ensure_ascii=False, indent=2)
+                    return json_data
+            
+            print(f"[INFO] Running OCR on {page_path.name}...")
+            width, height = page_img.size
+            
+            # Run Tesseract on paragraphs (already parallelized inside)
+            results = process_single_detection(page_img, boxes, classes)
+            
+            json_data = {"metadata": {"width": width, "height": height}, "paragraphs": []}
+            for bbox, text in results:
+                int_bbox = list(map(int, bbox))
+                json_data["paragraphs"].append({"bbox": int_bbox, "hye": text.strip()})
+            
+            # Save individual page result
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2)
+            
+            # Update status
+            if issue_id:
+                _update_live_ocr_status(issue_id, page_path.stem, json_data)
+            
+            return json_data
+        
+        # Step 3b: Batched Consumer - Collect images, batch YOLO, parallel OCR
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            while True:
-                img_path = image_queue.get()
-                if img_path is None: # Sentinel received
+            batch = []
+            done = False
+            
+            while not done:
+                # Collect a batch of images
+                while len(batch) < BATCH_SIZE:
+                    img_path = image_queue.get()
+                    if img_path is None:
+                        done = True
+                        break
+                    batch.append(img_path)
+                
+                if not batch:
                     break
-                    
-                future = executor.submit(
-                    process_single_page_task,
-                    img_path, ocr_dir, model, include_translation, min_translation_length, issue_id, inference_lock
-                )
-                results_futures.append(future)
-
-            # Wait for all OCR tasks to finish
-            for future in as_completed(results_futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"[ERROR] Page processing failed: {e}")
+                
+                # Run batched YOLO detection
+                print(f"[YOLO] Batch detecting {len(batch)} pages...")
+                detections = batch_yolo_detect(batch, model)
+                
+                # Submit OCR tasks in parallel for all detections
+                futures = []
+                for (page_path, page_img, boxes, classes) in detections:
+                    future = executor.submit(
+                        process_batch_ocr,
+                        page_img, boxes, classes, Path(page_path), ocr_dir, issue_id
+                    )
+                    futures.append(future)
+                
+                # Wait for this batch to complete before next
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"[ERROR] Page processing failed: {e}")
+                
+                # Clear batch for next iteration
+                batch = []
 
     finally:
         # Step 4: Cleanup PDF now that we have all PNGs (or if conversion failed)

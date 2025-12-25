@@ -37,6 +37,90 @@ DEVICE = (
     else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 
+
+def batch_yolo_detect(
+    image_paths: list,
+    model,
+    conf_thres=0.25,
+    iou_thres=0.45,
+):
+    """
+    Run YOLO detection on a batch of images in a single inference call.
+    Returns a list of (image_path, PIL.Image, boxes, classes) tuples.
+    """
+    # Load images
+    images = []
+    valid_paths = []
+    for path in image_paths:
+        try:
+            img = Image.open(path).convert("RGB")
+            images.append(img)
+            valid_paths.append(path)
+        except Exception as e:
+            print(f"[ERROR] Could not open image {path}: {e}")
+            continue
+    
+    if not images:
+        return []
+    
+    # Batch inference
+    with torch.no_grad():
+        results = model.predict(
+            images,
+            imgsz=1024,
+            conf=conf_thres,
+            device=DEVICE,
+            half=(DEVICE != "cpu"),
+            verbose=False
+        )
+    
+    # Process results
+    batch_results = []
+    for i, det_page in enumerate(results):
+        boxes_p, classes_p, scores_p = (
+            det_page.boxes.xyxy,
+            det_page.boxes.cls,
+            det_page.boxes.conf,
+        )
+        idx_p = nms(torch.Tensor(boxes_p), torch.Tensor(scores_p), iou_thres)
+        boxes_p = boxes_p[idx_p]
+        classes_p = classes_p[idx_p]
+        
+        batch_results.append((valid_paths[i], images[i], boxes_p, classes_p))
+    
+    return batch_results
+
+
+def process_single_detection(page: Image.Image, boxes_p, classes_p, save_crops=False, para_output=None):
+    """
+    Process YOLO detection results for a single page: crop, enhance, OCR.
+    Returns list of ((x1,y1,x2,y2), text) tuples.
+    """
+    def process_paragraph(i, cls, bbox):
+        if id_to_names[int(cls)] != "plain text":
+            return None
+        
+        x1, y1, x2, y2 = bbox
+        crop = page.crop((int(x1), int(y1), int(x2), int(y2)))
+        enhanced = enhance_and_binarize(crop)
+        
+        if save_crops and para_output:
+            para_path = Path(para_output) / f"paragraph_{i}.png"
+            enhanced.save(para_path)
+        
+        text = run_tesseract(enhanced)
+        return ((x1, y1, x2, y2), text.strip())
+    
+    # Process paragraphs in parallel
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(process_paragraph, i, cls, bbox)
+            for i, (cls, bbox) in enumerate(zip(classes_p, boxes_p))
+        ]
+        results = [f.result() for f in futures if f.result() is not None]
+    
+    return results
+
 def extract_paragraphs_and_lines(
     page_image_path: str,
     para_output: str,

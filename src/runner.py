@@ -53,12 +53,13 @@ def run_archive(
 
     start_time = time.time()
     completed_count = 0
+    ram, disk = get_health_stats()
 
     # Global cleanup at startup to purge any legacy images
     cleanup_all_images()
 
     print(f"[START] Starting archive processing from {start_year}-{start_month} to {end_year}-{end_month}")
-    update_runner_status(client, "active", pace=0)
+    update_runner_status(client, "active", pace=0, ram_mb=ram, disk_mb=disk)
     
     # GCS Scan: Find broken issues first
     broken_ids = get_broken_issues(client, start_year, end_year)
@@ -94,18 +95,12 @@ def run_archive(
             
             print(f"\n[RUN] --- Processing {issue_id} {'(PRIORITY)' if is_priority else ''} ---")
             
-            # Update status with latest health
-            update_runner_status(
-                client, 
-                f"processing {issue_id}", 
-                pace=completed_count / (max(1, time.time() - start_time) / 3600),
-                completed_issues=completed_count,
-                phase="download/prepare"
-            )
-            
             # Calculate pace
             elapsed = time.time() - start_time
             pace = (completed_count / (elapsed / 3600)) if elapsed > 0 else 0
+            
+            # Get current health stats
+            ram, disk = get_health_stats()
             
             update_runner_status(
                 client, 
@@ -117,40 +112,36 @@ def run_archive(
             )
             
             try:
-                try:
-                    # Run the OCR pipeline
-                    simple_ocr_pipeline(year, month)
-                    
-                    # Sync to GCS
-                    if not skip_sync:
-                        print(f"[CLOUD] Syncing {issue_id} to GCS...")
-                        sync_all_jsons()
-                except Exception as e:
-                    print(f"[ERROR] Error processing {issue_id}: {str(e)}")
-                    # We still cleanup even on error
-                finally:
-                    # Cleanup local images AND PDFs
-                    cleanup_issue_data(year, month)
-                    
-                    completed_count += 1
-                    print(f"[OK] Finished {issue_id}")
-                    
-                    # Report health after each issue
-                    ram, disk = get_health_stats()
-                    elapsed = time.time() - start_time
-                    pace = (completed_count / (elapsed / 3600)) if elapsed > 0 else 0
-                    
-                    update_runner_status(
-                        client, 
-                        "active", 
-                        ram_mb=ram, 
-                        disk_mb=disk, 
-                        pace=round(pace, 2),
-                        completed_this_session=completed_count
-                    )
+                # Run the OCR pipeline
+                simple_ocr_pipeline(year, month)
+                
+                # Sync to GCS
+                if not skip_sync:
+                    print(f"[CLOUD] Syncing {issue_id} to GCS...")
+                    sync_all_jsons()
+                
+                completed_count += 1
+                print(f"[OK] Finished {issue_id}")
             except Exception as e:
-                print(f"[ERROR] Unexpected error in loop for {issue_id}: {str(e)}")
-                continue
+                print(f"[ERROR] Error processing {issue_id}: {str(e)}")
+                # We still cleanup even on error
+            finally:
+                # Cleanup local images AND PDFs
+                cleanup_issue_data(year, month)
+                
+                # Report health after each issue
+                ram, disk = get_health_stats()
+                elapsed = time.time() - start_time
+                pace = (completed_count / (elapsed / 3600)) if elapsed > 0 else 0
+                
+                update_runner_status(
+                    client, 
+                    "active", 
+                    ram_mb=ram, 
+                    disk_mb=disk, 
+                    pace=round(pace, 2),
+                    completed_this_session=completed_count
+                )
                 
     finally:
         print("\n[DONE] Archive processing finished or stopped.")

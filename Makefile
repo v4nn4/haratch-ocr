@@ -2,7 +2,7 @@
 
 # Default target starts the archive computation with caffeinate to prevent sleep
 run: health
-	caffeinate -i OMP_THREAD_LIMIT=1 uv run python main.py archive
+	OMP_THREAD_LIMIT=1 caffeinate -i uv run python main.py archive
 
 # Start the dashboard in dev mode
 dev:
