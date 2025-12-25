@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal } from 'lucide-react';
 
+// Maximum total characters to display in the feed history before flushing old lines
+const MAX_CHARS = 2000;
+
 interface OCRFeedProps {
     latestSnippet: string | null;
     currentPage: string | null;
@@ -62,7 +65,16 @@ export default function OCRFeed({ latestSnippet, currentPage }: OCRFeedProps) {
         // Finished typing page
         setDisplayLines(prev => {
             const newLine = { text: text, id: lineIdCounter.current++, page: next.page };
-            return [...prev, newLine].slice(-10); // Keep last 10 pages in history
+            let newLines = [...prev, newLine];
+
+            // Flush old lines if total character count exceeds MAX_CHARS
+            let totalChars = newLines.reduce((sum, line) => sum + line.text.length, 0);
+            while (totalChars > MAX_CHARS && newLines.length > 1) {
+                totalChars -= newLines[0].text.length;
+                newLines = newLines.slice(1);
+            }
+
+            return newLines;
         });
         setCurrentText("");
 
