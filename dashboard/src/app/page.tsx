@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import ComputationGrid from '@/components/ComputationGrid';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { Loader2, RefreshCw, Layers, CheckCircle2, Clock, Terminal } from 'lucide-react';
+import { Loader2, RefreshCw, Layers, CheckCircle2, Clock, Terminal, Eye, EyeOff } from 'lucide-react';
 import OCRFeed from '@/components/OCRFeed';
 
 export default function Dashboard() {
@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [runner, setRunner] = useState<any>({ status: 'idle', ram_mb: 0, disk_mb: 0 });
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [feedEnabled, setFeedEnabled] = useState(true);
 
   const fetchData = async () => {
     try {
@@ -162,7 +163,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
           {/* Progress Map (Takes 2/3 space on large screens) */}
           <div className="lg:col-span-2 space-y-4">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+            <div className="flex items-center justify-between border-b border-border pb-2">
               <h2 className="text-sm font-bold uppercase tracking-widest text-zinc-500">Computation Progress Map</h2>
               <div className="flex items-center gap-4 text-[10px] font-bold uppercase tracking-wider">
                 <div className="flex items-center gap-1.5">
@@ -184,13 +185,34 @@ export default function Dashboard() {
 
           {/* Live Feed (Takes 1/3 space on large screens) */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+            <div className="flex items-center justify-between border-b border-border pb-2">
               <h2 className="text-sm font-bold uppercase tracking-widest text-zinc-500">Live OCR Stream</h2>
-              <div className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 animate-pulse uppercase">
-                Live Data
+              <div className="flex items-center gap-2">
+                {feedEnabled && (
+                  <div className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 animate-pulse uppercase">
+                    Live Data
+                  </div>
+                )}
+                <button
+                  onClick={() => setFeedEnabled(!feedEnabled)}
+                  className={`p-1.5 rounded-sm border transition-colors ${feedEnabled
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/20'
+                    : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:bg-zinc-700'
+                    }`}
+                  title={feedEnabled ? 'Hide OCR Feed' : 'Show OCR Feed'}
+                >
+                  {feedEnabled ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                </button>
               </div>
             </div>
-            <OCRFeed latestSnippet={runner?.latest_ocr} currentPage={runner?.current_page} />
+            {feedEnabled ? (
+              <OCRFeed latestSnippet={runner?.latest_ocr} currentPage={runner?.current_page} />
+            ) : (
+              <div className="bg-zinc-100 dark:bg-zinc-950 border border-border rounded-sm h-[400px] flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-600">
+                <EyeOff className="w-8 h-8 mb-2 opacity-30" />
+                <p className="text-[10px] uppercase tracking-widest">Feed Disabled</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

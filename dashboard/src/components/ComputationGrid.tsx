@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
+import { useTheme } from 'next-themes';
 
 interface IssueData {
     pages: number[];
@@ -15,6 +16,7 @@ interface ComputationGridProps {
 
 const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
     const svgRef = useRef<SVGSVGElement>(null);
+    const { resolvedTheme } = useTheme();
 
     const startYear = 1925;
     const startMonth = 8; // August
@@ -32,6 +34,15 @@ const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
     useEffect(() => {
         if (!svgRef.current) return;
 
+        // Define colors based on theme
+        const isDark = resolvedTheme === 'dark';
+        const colors = {
+            labelText: isDark ? '#52525b' : '#a1a1aa', // zinc-600 / zinc-400
+            emptyCell: isDark ? '#27272a' : '#e4e4e7', // zinc-800 / zinc-200
+            complete: '#10b981', // emerald-500
+            processing: '#3b82f6', // blue-500
+        };
+
         const svg = d3.select(svgRef.current);
         svg.selectAll('*').remove();
 
@@ -47,7 +58,9 @@ const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
             .attr('y', -10)
             .attr('text-anchor', 'start')
             .attr('transform', (d, i) => `rotate(-45, ${i * cellSize + cellSize / 2}, -10)`)
-            .attr('class', 'text-[9px] fill-zinc-400 dark:fill-zinc-600 font-bold')
+            .attr('font-size', '9px')
+            .attr('font-weight', 'bold')
+            .attr('fill', colors.labelText)
             .text((d) => (d % 5 === 0 || d === startYear || d === endYear) ? d : '');
 
         // Add Month labels (Y axis) - Transposed
@@ -59,7 +72,9 @@ const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
             .attr('y', (d, i) => i * cellSize + cellSize / 2)
             .attr('dy', '0.35em')
             .attr('text-anchor', 'end')
-            .attr('class', 'text-[10px] fill-zinc-400 dark:fill-zinc-600 font-bold')
+            .attr('font-size', '10px')
+            .attr('font-weight', 'bold')
+            .attr('fill', colors.labelText)
             .text((d) => d3.timeFormat('%B')(new Date(2000, d - 1)));
 
         // Draw the grid
@@ -80,12 +95,12 @@ const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
                     .attr('width', cellSize - 1)
                     .attr('height', cellSize - 1)
                     .attr('rx', 0)
-                    .attr('class', 'fill-zinc-100 dark:fill-zinc-900/50');
+                    .attr('fill', colors.emptyCell);
 
                 if (issue) {
                     if (issue.isComplete) {
                         cell.select('rect')
-                            .attr('class', 'fill-emerald-500');
+                            .attr('fill', colors.complete);
                     } else if (issue.pages.length > 0) {
                         // Standard left-to-right fill within the cell
                         const totalPages = issue.totalPages || (Math.max(...issue.pages, 1) + 1);
@@ -99,13 +114,13 @@ const ComputationGrid: React.FC<ComputationGridProps> = ({ data }) => {
                             .attr('y', 0)
                             .attr('width', Math.max(pWidth, 0.5))
                             .attr('height', cellSize - 1)
-                            .attr('class', 'fill-blue-500');
+                            .attr('fill', colors.processing);
                     }
                 }
             });
         });
 
-    }, [data]);
+    }, [data, resolvedTheme]);
 
     return (
         <div className="overflow-auto bg-background p-6 rounded-sm border border-border shadow-sm max-h-[70vh]">
